@@ -9,7 +9,18 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { background: #000; color: #fff; font-family: 'Inconsolata', monospace; font-weight: 300; height: 100%; overflow: hidden; }
-    canvas { position: fixed; inset: 0; width: 100% !important; height: 100% !important; display: block; }
+ 
+    #canvas-wrap {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: #000;
+    }
+ 
+    canvas {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+    }
  
     #back {
       position: fixed; top: 2rem; left: 2.5rem; z-index: 10;
@@ -34,17 +45,17 @@
     }
  
     #vr-btn {
-      position: fixed; bottom: 2rem; right: 2.5rem; z-index: 10;
+      position: fixed; bottom: 2rem; right: 2.5rem; z-index: 100;
       cursor: pointer;
-      background: rgba(255,255,255,0.12);
-      border: 1px solid rgba(255,255,255,0.6);
+      background: rgba(0,0,0,0.7);
+      border: 1px solid rgba(255,255,255,0.8);
       color: #fff;
       font-family: 'Inconsolata', monospace; font-size: 0.7rem;
       font-weight: 400; letter-spacing: 0.2em; text-transform: uppercase;
       padding: 0.9rem 2rem;
       transition: background 0.3s, border-color 0.3s;
     }
-    #vr-btn:hover:not(:disabled) { background: rgba(255,255,255,0.22); border-color: #fff; }
+    #vr-btn:hover:not(:disabled) { background: rgba(255,255,255,0.15); border-color: #fff; }
     #vr-btn:disabled { opacity: 0.2; cursor: not-allowed; }
  
     #hint {
@@ -83,7 +94,7 @@
     <a href="index.html">Return to gallery</a>
   </div>
  
-  <canvas id="canvas"></canvas>
+  <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
  
   <a href="index.html" id="back"><div class="arrow"></div><span>Gallery</span></a>
   <div id="image-title"></div>
@@ -99,11 +110,7 @@
  
     // ── CANVAS & GL ───────────────────────────────────
     const canvas = document.getElementById('canvas');
-    canvas.width  = window.innerWidth  * window.devicePixelRatio;
-    canvas.height = window.innerHeight * window.devicePixelRatio;
  
-    // Request XR-compatible context immediately at startup
-    // This MUST happen before texture load to avoid context reset
     const gl = canvas.getContext('webgl2', { xrCompatible: true })
             || canvas.getContext('webgl',  { xrCompatible: true });
  
@@ -113,17 +120,22 @@
     }
  
     // ── SHADERS ───────────────────────────────────────
+    // World-space plane: uses projection + view matrices so the
+    // image sits at a fixed position in the scene, not glued to the camera.
     const vertSrc = `
-      attribute vec2 a_pos;
+      attribute vec3 a_pos;
       attribute vec2 a_uv;
+      uniform mat4 u_proj;
+      uniform mat4 u_view;
+      uniform mat4 u_model;
       varying vec2 v_uv;
       void main() {
-        gl_Position = vec4(a_pos, 0.0, 1.0);
+        gl_Position = u_proj * u_view * u_model * vec4(a_pos, 1.0);
         v_uv = a_uv;
       }
     `;
  
-    // u_offsetX: 0.0 = left eye (left half), 0.5 = right eye (right half)
+    // u_offsetX: 0.0 = left eye, 0.5 = right eye
     const fragSrc = `
       precision mediump float;
       uniform sampler2D u_tex;
@@ -139,9 +151,8 @@
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
       gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.error('Shader error:', gl.getShaderInfoLog(s));
-      }
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+        console.error('Shader:', gl.getShaderInfoLog(s));
       return s;
     }
  
@@ -149,39 +160,78 @@
     gl.attachShader(prog, makeShader(gl.VERTEX_SHADER,   vertSrc));
     gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, fragSrc));
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.error('Program link error:', gl.getProgramInfoLog(prog));
-    }
     gl.useProgram(prog);
  
-    // Fullscreen quad (clip space -1 to 1, UV 0 to 1)
-    const quadVerts = new Float32Array([
-      -1, -1,  0, 1,
-       1, -1,  1, 1,
-      -1,  1,  0, 0,
-       1,  1,  1, 0,
-    ]);
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
- 
-    const aPos     = gl.getAttribLocation(prog, 'a_pos');
-    const aUV      = gl.getAttribLocation(prog, 'a_uv');
+    // Uniforms
+    const uProj    = gl.getUniformLocation(prog, 'u_proj');
+    const uView    = gl.getUniformLocation(prog, 'u_view');
+    const uModel   = gl.getUniformLocation(prog, 'u_model');
     const uTex     = gl.getUniformLocation(prog, 'u_tex');
     const uOffsetX = gl.getUniformLocation(prog, 'u_offsetX');
  
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(aUV);
-    gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 16, 8);
- 
     gl.uniform1i(uTex, 0);
+ 
+    // ── GEOMETRY ─────────────────────────────────────
+    // A flat quad in world space. Width/height set after image loads.
+    // Positioned at z = -3.0 metres in front of origin.
+    let quadVBO = null;
+ 
+    function buildQuad(w, h) {
+      // Vertices: x, y, z, u, v
+      const z = -3.0; // 3 metres in front
+      const verts = new Float32Array([
+        -w/2, -h/2, z,   0, 1,
+         w/2, -h/2, z,   1, 1,
+        -w/2,  h/2, z,   0, 0,
+         w/2,  h/2, z,   1, 0,
+      ]);
+      if (quadVBO) gl.deleteBuffer(quadVBO);
+      quadVBO = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+      gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    }
+ 
+    function bindQuad() {
+      gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+      const aPos = gl.getAttribLocation(prog, 'a_pos');
+      const aUV  = gl.getAttribLocation(prog, 'a_uv');
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 20, 0);
+      gl.enableVertexAttribArray(aUV);
+      gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 20, 12);
+    }
+ 
+    // Identity matrix helper
+    function identity() {
+      return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+    }
+ 
+    // Simple perspective matrix for flat preview
+    function perspective(fovY, aspect, near, far) {
+      const f = 1.0 / Math.tan(fovY / 2);
+      const nf = 1 / (near - far);
+      return new Float32Array([
+        f/aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (far+near)*nf, -1,
+        0, 0, 2*far*near*nf, 0
+      ]);
+    }
  
     // ── TEXTURE ───────────────────────────────────────
     let glTexture = null;
     let imgLoaded = false;
+    let imgAspect = 1; // per-eye aspect (width/2 / height)
  
     function uploadTexture(img) {
+      imgAspect = (img.width / 2) / img.height;
+ 
+      // Build quad at comfortable viewing size
+      // 2.8m tall, proportional width based on per-eye aspect
+      const h = 2.8;
+      const w = h * imgAspect;
+      buildQuad(w, h);
+ 
       glTexture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, glTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
@@ -190,20 +240,24 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       imgLoaded = true;
+ 
+      // Size canvas for flat preview (left eye only, correct aspect)
+      const previewH = Math.min(window.innerHeight, 900);
+      const previewW = Math.round(previewH * imgAspect);
+      canvas.width  = previewW;
+      canvas.height = previewH;
     }
  
     // ── DRAW ─────────────────────────────────────────
-    // offsetX: 0.0 = left half, 0.5 = right half
-    function draw(offsetX) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-      gl.enableVertexAttribArray(aPos);
-      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
-      gl.enableVertexAttribArray(aUV);
-      gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 16, 8);
+    function draw(projMatrix, viewMatrix, offsetX) {
       gl.useProgram(prog);
-      gl.uniform1i(uTex, 0);
-      gl.uniform1f(uOffsetX, offsetX);
+      bindQuad();
       gl.bindTexture(gl.TEXTURE_2D, glTexture);
+      gl.uniform1i(uTex, 0);
+      gl.uniformMatrix4fv(uProj,  false, projMatrix);
+      gl.uniformMatrix4fv(uView,  false, viewMatrix);
+      gl.uniformMatrix4fv(uModel, false, identity());
+      gl.uniform1f(uOffsetX, offsetX);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
  
@@ -212,13 +266,16 @@
  
     function flatLoop() {
       if (!flatRunning || xrSession) return;
-      canvas.width  = window.innerWidth  * window.devicePixelRatio;
-      canvas.height = window.innerHeight * window.devicePixelRatio;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.clearColor(0, 0, 0, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      if (imgLoaded) draw(0.0); // left eye preview
+      if (imgLoaded) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+ 
+        const proj = perspective(Math.PI / 3, imgAspect, 0.1, 100);
+        const view = identity(); // camera at origin looking at -z
+        draw(proj, view, 0.0); // left eye only
+      }
       requestAnimationFrame(flatLoop);
     }
  
@@ -228,7 +285,6 @@
     let xrLayer    = null;
  
     async function init() {
-      // Check VR support
       if (navigator.xr) {
         try {
           const ok = await navigator.xr.isSessionSupported('immersive-vr');
@@ -240,7 +296,6 @@
         } catch(e) {}
       }
  
-      // Load image — context is already XR-compatible so no reset risk
       if (imgSrc) {
         const img = new Image();
         img.crossOrigin = 'anonymous';
@@ -266,7 +321,6 @@
           optionalFeatures: ['local-floor', 'bounded-floor']
         });
  
-        // Context already XR-compatible — just create layer
         xrLayer = new XRWebGLLayer(xrSession, gl);
         xrSession.updateRenderState({ baseLayer: xrLayer });
  
@@ -275,7 +329,6 @@
  
         flatRunning = false;
  
-        // Hide 2D UI
         ['back','hint','image-title'].forEach(id => {
           document.getElementById(id).style.display = 'none';
         });
@@ -287,7 +340,7 @@
         xrSession.requestAnimationFrame(xrLoop);
  
       } catch(err) {
-        console.error('VR session error:', err);
+        console.error('VR error:', err);
         xrSession = null;
       }
     }
@@ -304,14 +357,13 @@
       const btn = document.getElementById('vr-btn');
       btn.textContent = 'Enter VR';
       btn.onclick = enterVR;
- 
       requestAnimationFrame(flatLoop);
     }
  
     // ── XR RENDER LOOP ────────────────────────────────
-    // view.eye === 'left' or 'right' — the WebXR API tells us
-    // exactly which eye is rendering. We use this to pick the
-    // correct half of the SBS image. No guesswork.
+    // Each view has its own projection and view matrices from the headset.
+    // The image is a world-space plane at z=-3, so it stays fixed in space
+    // as the viewer moves their head — proper VR behaviour.
     function xrLoop(time, frame) {
       if (!xrSession) return;
       xrSession.requestAnimationFrame(xrLoop);
@@ -328,17 +380,25 @@
         const vp = xrLayer.getViewport(view);
         gl.viewport(vp.x, vp.y, vp.width, vp.height);
  
-        // Left eye → left half (offsetX 0.0)
-        // Right eye → right half (offsetX 0.5)
+        // Use the headset's own projection and view matrices
+        // This places the image correctly in 3D world space
+        const proj = view.projectionMatrix;
+        const viewMat = view.transform.inverse.matrix;
+ 
+        // Left eye → left half (0.0), Right eye → right half (0.5)
         const offsetX = (view.eye === 'right') ? 0.5 : 0.0;
-        draw(offsetX);
+ 
+        draw(proj, viewMat, offsetX);
       }
     }
  
     // ── RESIZE ────────────────────────────────────────
     window.addEventListener('resize', () => {
-      canvas.width  = window.innerWidth  * window.devicePixelRatio;
-      canvas.height = window.innerHeight * window.devicePixelRatio;
+      if (!imgLoaded || xrSession) return;
+      const previewH = Math.min(window.innerHeight, 900);
+      const previewW = Math.round(previewH * imgAspect);
+      canvas.width  = previewW;
+      canvas.height = previewH;
     });
  
     // ── START ─────────────────────────────────────────

@@ -8,18 +8,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&family=Inconsolata:wght@300&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
- 
-    html, body {
-      background: #000;
-      color: #fff;
-      font-family: 'Inconsolata', monospace;
-      font-weight: 300;
-      height: 100%;
-      overflow: hidden;
-    }
- 
-    #canvas-container { position: fixed; inset: 0; }
-    canvas { display: block; width: 100% !important; height: 100% !important; }
+    html, body { background: #000; color: #fff; font-family: 'Inconsolata', monospace; font-weight: 300; height: 100%; overflow: hidden; }
+    canvas { position: fixed; inset: 0; width: 100% !important; height: 100% !important; display: block; }
  
     #back {
       position: fixed; top: 2rem; left: 2.5rem; z-index: 10;
@@ -93,146 +83,268 @@
     <a href="index.html">Return to gallery</a>
   </div>
  
-  <div id="canvas-container"></div>
+  <canvas id="canvas"></canvas>
  
   <a href="index.html" id="back"><div class="arrow"></div><span>Gallery</span></a>
   <div id="image-title"></div>
   <div id="hint">Flat preview — left eye<br>Open in Quest browser<br>for stereoscopic VR</div>
   <button id="vr-btn" disabled>Enter VR</button>
  
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
- 
     // ── URL PARAMS ────────────────────────────────────
     const params   = new URLSearchParams(window.location.search);
     const imgSrc   = params.get('img');
     const imgTitle = params.get('title') || '';
     if (imgTitle) document.getElementById('image-title').textContent = decodeURIComponent(imgTitle);
-    if (!imgSrc) {
+ 
+    // ── CANVAS & GL ───────────────────────────────────
+    const canvas = document.getElementById('canvas');
+    canvas.width  = window.innerWidth  * window.devicePixelRatio;
+    canvas.height = window.innerHeight * window.devicePixelRatio;
+ 
+    // Request XR-compatible context immediately at startup
+    // This MUST happen before texture load to avoid context reset
+    const gl = canvas.getContext('webgl2', { xrCompatible: true })
+            || canvas.getContext('webgl',  { xrCompatible: true });
+ 
+    if (!gl) {
       document.getElementById('error').classList.add('visible');
       document.getElementById('loading').classList.add('hidden');
     }
  
-    // ── THREE.JS ──────────────────────────────────────
-    const container = document.getElementById('canvas-container');
-    const scene     = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    // ── SHADERS ───────────────────────────────────────
+    const vertSrc = `
+      attribute vec2 a_pos;
+      attribute vec2 a_uv;
+      varying vec2 v_uv;
+      void main() {
+        gl_Position = vec4(a_pos, 0.0, 1.0);
+        v_uv = a_uv;
+      }
+    `;
  
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
-    camera.position.set(0, 0, 0);
+    // u_offsetX: 0.0 = left eye (left half), 0.5 = right eye (right half)
+    const fragSrc = `
+      precision mediump float;
+      uniform sampler2D u_tex;
+      uniform float u_offsetX;
+      varying vec2 v_uv;
+      void main() {
+        vec2 uv = vec2(v_uv.x * 0.5 + u_offsetX, v_uv.y);
+        gl_FragColor = texture2D(u_tex, uv);
+      }
+    `;
  
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true;
-    container.appendChild(renderer.domElement);
- 
-    // ── SCENE BUILD ───────────────────────────────────
-    let sbsTexture = null;
-    let inVR = false;
- 
-    function buildScene(texture) {
-      sbsTexture = texture;
-      texture.minFilter = THREE.LinearFilter;
-      texture.magFilter = THREE.LinearFilter;
- 
-      // Default: show left half (flat Mac preview)
-      texture.repeat.set(0.5, 1);
-      texture.offset.set(0, 0);
-      texture.needsUpdate = true;
- 
-      // Plane sized to per-eye aspect ratio
-      const eyeAspect   = (texture.image.width / 2) / texture.image.height;
-      const planeHeight = 2.8;
-      const planeWidth  = planeHeight * eyeAspect;
- 
-      const geo  = new THREE.PlaneGeometry(planeWidth, planeHeight);
-      const mat  = new THREE.MeshBasicMaterial({ map: texture });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0, 0, -2.0);
- 
-      // ── PER-EYE UV SWITCHING ─────────────────────
-      // onBeforeRender fires separately for each eye in WebXR.
-      // We check which sub-camera is rendering and offset UVs.
-      mesh.onBeforeRender = function(rend, sc, cam) {
-        if (!inVR) return;
-        const xrCam = rend.xr.getCamera();
-        if (!xrCam.cameras || xrCam.cameras.length < 2) return;
- 
-        if (cam === xrCam.cameras[1]) {
-          // Right eye → right half of SBS
-          texture.offset.set(0.5, 0);
-        } else {
-          // Left eye → left half of SBS
-          texture.offset.set(0, 0);
-        }
-        texture.needsUpdate = true;
-      };
- 
-      scene.add(mesh);
-      document.getElementById('loading').classList.add('hidden');
+    function makeShader(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error('Shader error:', gl.getShaderInfoLog(s));
+      }
+      return s;
     }
  
-    // ── VR BUTTON ─────────────────────────────────────
-    const vrBtn = document.getElementById('vr-btn');
+    const prog = gl.createProgram();
+    gl.attachShader(prog, makeShader(gl.VERTEX_SHADER,   vertSrc));
+    gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, fragSrc));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(prog));
+    }
+    gl.useProgram(prog);
  
-    async function checkVRSupport() {
-      if (!navigator.xr) return;
-      try {
-        const ok = await navigator.xr.isSessionSupported('immersive-vr');
-        if (ok) { vrBtn.disabled = false; vrBtn.addEventListener('click', enterVR); }
-      } catch(e) {}
+    // Fullscreen quad (clip space -1 to 1, UV 0 to 1)
+    const quadVerts = new Float32Array([
+      -1, -1,  0, 1,
+       1, -1,  1, 1,
+      -1,  1,  0, 0,
+       1,  1,  1, 0,
+    ]);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+ 
+    const aPos     = gl.getAttribLocation(prog, 'a_pos');
+    const aUV      = gl.getAttribLocation(prog, 'a_uv');
+    const uTex     = gl.getUniformLocation(prog, 'u_tex');
+    const uOffsetX = gl.getUniformLocation(prog, 'u_offsetX');
+ 
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(aUV);
+    gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 16, 8);
+ 
+    gl.uniform1i(uTex, 0);
+ 
+    // ── TEXTURE ───────────────────────────────────────
+    let glTexture = null;
+    let imgLoaded = false;
+ 
+    function uploadTexture(img) {
+      glTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, glTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      imgLoaded = true;
+    }
+ 
+    // ── DRAW ─────────────────────────────────────────
+    // offsetX: 0.0 = left half, 0.5 = right half
+    function draw(offsetX) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(aUV);
+      gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 16, 8);
+      gl.useProgram(prog);
+      gl.uniform1i(uTex, 0);
+      gl.uniform1f(uOffsetX, offsetX);
+      gl.bindTexture(gl.TEXTURE_2D, glTexture);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+ 
+    // ── FLAT PREVIEW LOOP ─────────────────────────────
+    let flatRunning = true;
+ 
+    function flatLoop() {
+      if (!flatRunning || xrSession) return;
+      canvas.width  = window.innerWidth  * window.devicePixelRatio;
+      canvas.height = window.innerHeight * window.devicePixelRatio;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      if (imgLoaded) draw(0.0); // left eye preview
+      requestAnimationFrame(flatLoop);
+    }
+ 
+    // ── WEBXR ─────────────────────────────────────────
+    let xrSession  = null;
+    let xrRefSpace = null;
+    let xrLayer    = null;
+ 
+    async function init() {
+      // Check VR support
+      if (navigator.xr) {
+        try {
+          const ok = await navigator.xr.isSessionSupported('immersive-vr');
+          if (ok) {
+            const btn = document.getElementById('vr-btn');
+            btn.disabled = false;
+            btn.addEventListener('click', enterVR);
+          }
+        } catch(e) {}
+      }
+ 
+      // Load image — context is already XR-compatible so no reset risk
+      if (imgSrc) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          uploadTexture(img);
+          document.getElementById('loading').classList.add('hidden');
+          flatLoop();
+        };
+        img.onerror = () => {
+          document.getElementById('error').classList.add('visible');
+          document.getElementById('loading').classList.add('hidden');
+        };
+        img.src = decodeURIComponent(imgSrc);
+      } else {
+        document.getElementById('error').classList.add('visible');
+        document.getElementById('loading').classList.add('hidden');
+      }
     }
  
     async function enterVR() {
       try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
+        xrSession = await navigator.xr.requestSession('immersive-vr', {
           optionalFeatures: ['local-floor', 'bounded-floor']
         });
-        renderer.xr.setSession(session);
-        inVR = true;
  
-        // Hide 2D UI in headset
-        ['back','hint','image-title'].forEach(id => document.getElementById(id).style.display = 'none');
-        vrBtn.textContent = 'Exit VR';
-        vrBtn.onclick = () => session.end();
+        // Context already XR-compatible — just create layer
+        xrLayer = new XRWebGLLayer(xrSession, gl);
+        xrSession.updateRenderState({ baseLayer: xrLayer });
  
-        session.addEventListener('end', () => {
-          inVR = false;
-          if (sbsTexture) { sbsTexture.offset.set(0,0); sbsTexture.needsUpdate = true; }
-          ['back','hint','image-title'].forEach(id => document.getElementById(id).style.display = '');
-          vrBtn.textContent = 'Enter VR';
-          vrBtn.onclick = enterVR;
+        xrRefSpace = await xrSession.requestReferenceSpace('local-floor')
+          .catch(() => xrSession.requestReferenceSpace('local'));
+ 
+        flatRunning = false;
+ 
+        // Hide 2D UI
+        ['back','hint','image-title'].forEach(id => {
+          document.getElementById(id).style.display = 'none';
         });
+        const btn = document.getElementById('vr-btn');
+        btn.textContent = 'Exit VR';
+        btn.onclick = () => xrSession.end();
  
-      } catch(err) { console.error('VR error:', err); }
+        xrSession.addEventListener('end', onSessionEnd);
+        xrSession.requestAnimationFrame(xrLoop);
+ 
+      } catch(err) {
+        console.error('VR session error:', err);
+        xrSession = null;
+      }
     }
  
-    checkVRSupport();
+    function onSessionEnd() {
+      xrSession  = null;
+      xrRefSpace = null;
+      xrLayer    = null;
+      flatRunning = true;
  
-    // ── LOAD TEXTURE ──────────────────────────────────
-    if (imgSrc) {
-      new THREE.TextureLoader().load(
-        decodeURIComponent(imgSrc),
-        tex  => buildScene(tex),
-        undefined,
-        ()   => {
-          document.getElementById('error').classList.add('visible');
-          document.getElementById('loading').classList.add('hidden');
-        }
-      );
+      ['back','hint','image-title'].forEach(id => {
+        document.getElementById(id).style.display = '';
+      });
+      const btn = document.getElementById('vr-btn');
+      btn.textContent = 'Enter VR';
+      btn.onclick = enterVR;
+ 
+      requestAnimationFrame(flatLoop);
     }
  
-    // ── RENDER LOOP ───────────────────────────────────
-    renderer.setAnimationLoop(() => renderer.render(scene, camera));
+    // ── XR RENDER LOOP ────────────────────────────────
+    // view.eye === 'left' or 'right' — the WebXR API tells us
+    // exactly which eye is rendering. We use this to pick the
+    // correct half of the SBS image. No guesswork.
+    function xrLoop(time, frame) {
+      if (!xrSession) return;
+      xrSession.requestAnimationFrame(xrLoop);
+      if (!imgLoaded) return;
+ 
+      const pose = frame.getViewerPose(xrRefSpace);
+      if (!pose) return;
+ 
+      gl.bindFramebuffer(gl.FRAMEBUFFER, xrLayer.framebuffer);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+ 
+      for (const view of pose.views) {
+        const vp = xrLayer.getViewport(view);
+        gl.viewport(vp.x, vp.y, vp.width, vp.height);
+ 
+        // Left eye → left half (offsetX 0.0)
+        // Right eye → right half (offsetX 0.5)
+        const offsetX = (view.eye === 'right') ? 0.5 : 0.0;
+        draw(offsetX);
+      }
+    }
  
     // ── RESIZE ────────────────────────────────────────
     window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      canvas.width  = window.innerWidth  * window.devicePixelRatio;
+      canvas.height = window.innerHeight * window.devicePixelRatio;
     });
+ 
+    // ── START ─────────────────────────────────────────
+    init();
  
   </script>
 </body>
 </html>
+ 

@@ -3,156 +3,194 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>A Passive Frequency — Viewer</title>
+  <title>A Passive Frequency</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&family=Inconsolata:wght@300&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Inconsolata:wght@300;400&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+ 
+    :root {
+      --black: #000000;
+      --white: #ffffff;
+      --dim: rgba(255,255,255,0.15);
+      --mid: rgba(255,255,255,0.45);
+      --accent: rgba(255,255,255,0.07);
+    }
+ 
     html, body {
-      background: #000;
-      color: #fff;
+      background: var(--black);
+      color: var(--white);
       font-family: 'Inconsolata', monospace;
       font-weight: 300;
-      height: 100%;
-      overflow: hidden;
+      min-height: 100vh;
+      cursor: crosshair;
     }
-
-    #canvas-container {
+ 
+    /* ── HEADER ── */
+    header {
       position: fixed;
-      inset: 0;
-    }
-
-    canvas {
-      display: block;
-      width: 100% !important;
-      height: 100% !important;
-    }
-
-    /* ── UI OVERLAY ── */
-    #ui {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 10;
-    }
-
-    /* Back button */
-    #back {
-      position: fixed;
-      top: 2rem;
-      left: 2.5rem;
-      pointer-events: all;
-      cursor: pointer;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
       display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      opacity: 0.5;
-      transition: opacity 0.3s;
-      text-decoration: none;
-      color: #fff;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding: 2.5rem 3rem 1.5rem;
+      background: linear-gradient(to bottom, #000 60%, transparent);
     }
-
-    #back:hover { opacity: 1; }
-
-    #back .arrow {
-      width: 24px;
-      height: 1px;
-      background: #fff;
-      position: relative;
-    }
-
-    #back .arrow::before {
-      content: '';
-      position: absolute;
-      left: 0; top: -4px;
-      width: 8px; height: 8px;
-      border-left: 1px solid #fff;
-      border-bottom: 1px solid #fff;
-      transform: rotate(45deg);
-    }
-
-    #back span {
-      font-size: 0.6rem;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-    }
-
-    /* Title */
-    #image-title {
-      position: fixed;
-      bottom: 2rem;
-      left: 2.5rem;
+ 
+    .site-title {
       font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-size: clamp(1.1rem, 2vw, 1.4rem);
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--white);
+    }
+ 
+    .site-title span {
       font-style: italic;
       font-weight: 300;
-      font-size: 1.1rem;
-      opacity: 0.5;
-      letter-spacing: 0.05em;
+      opacity: 0.6;
+      margin-right: 0.5em;
     }
-
-    /* VR launch button */
-    #vr-btn {
-      position: fixed;
-      bottom: 2rem;
-      right: 2.5rem;
-      pointer-events: all;
-      cursor: pointer;
-      background: none;
-      border: 1px solid rgba(255,255,255,0.25);
-      color: #fff;
-      font-family: 'Inconsolata', monospace;
-      font-size: 0.6rem;
+ 
+    .header-meta {
+      font-size: 0.65rem;
       letter-spacing: 0.2em;
       text-transform: uppercase;
-      padding: 0.75rem 1.5rem;
-      transition: border-color 0.3s, background 0.3s;
+      color: var(--dim);
+      text-align: right;
+      line-height: 1.8;
     }
-
-    #vr-btn:hover {
-      border-color: rgba(255,255,255,0.6);
-      background: rgba(255,255,255,0.05);
-    }
-
-    #vr-btn:disabled {
-      opacity: 0.2;
-      cursor: not-allowed;
-    }
-
-    /* Loading state */
-    #loading {
+ 
+    /* ── FILTER BAR ── */
+    .filter-bar {
       position: fixed;
-      inset: 0;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-      gap: 1rem;
-      background: #000;
-      z-index: 20;
-      transition: opacity 0.6s;
+      gap: 0.25rem;
+      background: rgba(0,0,0,0.85);
+      border: 1px solid rgba(255,255,255,0.5);
+      padding: 0.5rem;
+      backdrop-filter: blur(12px);
     }
-
-    #loading.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .loading-text {
-      font-size: 0.6rem;
-      letter-spacing: 0.3em;
+ 
+    .filter-btn {
+      background: none;
+      border: 1px solid transparent;
+      color: rgba(255,255,255,0.5);
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.7rem;
+      font-weight: 400;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.3);
-      animation: pulse 2s ease-in-out infinite;
+      padding: 0.7rem 1.4rem;
+      cursor: crosshair;
+      transition: color 0.3s, background 0.3s, border-color 0.3s;
     }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 0.3; }
-      50% { opacity: 0.7; }
+ 
+    .filter-btn:hover {
+      color: var(--white);
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.3);
     }
-
-    /* Error state */
-    #error {
+ 
+    .filter-btn.active {
+      color: var(--white);
+      background: rgba(255,255,255,0.12);
+      border-color: rgba(255,255,255,0.6);
+    }
+ 
+    /* ── GRID ── */
+    .gallery {
+      padding: 8rem 2rem 8rem;
+      columns: 3 320px;
+      column-gap: 20px;
+    }
+ 
+    .gallery-item {
+      break-inside: avoid;
+      position: relative;
+      margin-bottom: 20px;
+      overflow: hidden;
+      cursor: crosshair;
+    }
+ 
+    .gallery-item img {
+      display: block;
+      width: 100%;
+      height: auto;
+      filter: brightness(0.85);
+      transition: filter 0.6s ease, transform 0.8s ease;
+    }
+ 
+    /* Show left half as preview (right half is for other eye) */
+    .gallery-item img {
+      object-fit: cover;
+    }
+ 
+    .gallery-item:hover img {
+      filter: brightness(1);
+      transform: scale(1.015);
+    }
+ 
+    /* ── ITEM OVERLAY ── */
+    .item-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 50%);
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 1.5rem;
+    }
+ 
+    .gallery-item:hover .item-overlay {
+      opacity: 1;
+    }
+ 
+    .item-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: 1rem;
+      letter-spacing: 0.05em;
+      color: var(--white);
+      margin-bottom: 0.3rem;
+    }
+ 
+    .item-category {
+      font-size: 0.55rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--mid);
+    }
+ 
+    .vr-badge {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      font-size: 0.5rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--dim);
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 0.3rem 0.6rem;
+      opacity: 0;
+      transition: opacity 0.5s;
+    }
+ 
+    .gallery-item:hover .vr-badge {
+      opacity: 1;
+    }
+ 
+    /* ── EMPTY STATE ── */
+    .empty-state {
       display: none;
       position: fixed;
       inset: 0;
@@ -160,244 +198,136 @@
       justify-content: center;
       flex-direction: column;
       gap: 1rem;
-      z-index: 20;
-    }
-
-    #error.visible { display: flex; }
-
-    #error p {
+      color: var(--dim);
       font-size: 0.65rem;
       letter-spacing: 0.2em;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.4);
     }
-
-    /* Flat preview hint */
-    #preview-hint {
-      position: fixed;
-      top: 2rem;
-      right: 2.5rem;
-      font-size: 0.55rem;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      color: rgba(255,255,255,0.2);
-      text-align: right;
-      line-height: 1.8;
+ 
+    .empty-state.visible {
+      display: flex;
     }
+ 
+    /* ── PAGE LOAD ANIMATION ── */
+    .gallery-item {
+      opacity: 0;
+      animation: fadeIn 0.8s ease forwards;
+    }
+ 
+    @keyframes fadeIn {
+      to { opacity: 1; }
+    }
+ 
+    header {
+      opacity: 0;
+      animation: fadeIn 1.2s ease 0.2s forwards;
+    }
+ 
+    .filter-bar {
+      opacity: 0;
+      animation: fadeIn 1s ease 0.5s forwards;
+    }
+ 
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 2px; }
+    ::-webkit-scrollbar-track { background: var(--black); }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); }
   </style>
 </head>
 <body>
-
-  <div id="loading">
-    <div class="loading-text">Loading image</div>
+ 
+  <header>
+    <div class="site-title">
+      <span>A</span>Passive Frequency
+    </div>
+    <div class="header-meta">
+      Stereoscopic VR Series<br>
+      Shane — RMIT University
+    </div>
+  </header>
+ 
+  <main class="gallery" id="gallery"></main>
+ 
+  <div class="empty-state" id="emptyState">
+    No images in this category
   </div>
-
-  <div id="error">
-    <p>Image could not be loaded</p>
-    <a href="index.html" style="color:rgba(255,255,255,0.3);font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;">Return to gallery</a>
-  </div>
-
-  <div id="canvas-container"></div>
-
-  <div id="ui">
-    <a href="index.html" id="back">
-      <div class="arrow"></div>
-      <span>Gallery</span>
-    </a>
-    <div id="image-title"></div>
-    <div id="preview-hint">Flat preview<br>Open in VR headset<br>for stereoscopic view</div>
-    <button id="vr-btn" disabled>Enter VR</button>
-  </div>
-
-  <!-- Three.js r128 -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
+ 
+  <nav class="filter-bar">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="Listeners">Listeners</button>
+    <button class="filter-btn" data-filter="Signalers">Signalers</button>
+    <button class="filter-btn" data-filter="Watchers">Watchers</button>
+  </nav>
+ 
   <script>
     // ─────────────────────────────────────────────────
-    // PARSE URL PARAMS
+    // IMAGE MANIFEST
+    // Add your images here. Drop files into the images/
+    // folder and add one entry per image below.
+    //
+    // src:      path relative to index.html
+    // title:    displayed on hover
+    // category: Listeners | Signalers | Watchers
     // ─────────────────────────────────────────────────
-    const params = new URLSearchParams(window.location.search);
-    const imgSrc = params.get('img');
-    const imgTitle = params.get('title') || '';
-
-    document.getElementById('image-title').textContent = imgTitle
-      ? decodeURIComponent(imgTitle)
-      : '';
-
-    if (!imgSrc) {
-      document.getElementById('error').classList.add('visible');
-      document.getElementById('loading').classList.add('hidden');
-    }
-
+    const images = [
+      // Example entries — replace with your actual files
+      { src: 'images/placeholder.jpg', title: 'Example I', category: 'Listeners' },
+    ];
+ 
     // ─────────────────────────────────────────────────
-    // THREE.JS SETUP
+    // RENDER
     // ─────────────────────────────────────────────────
-    const container = document.getElementById('canvas-container');
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
-
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
-    camera.position.set(0, 0, 0);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true;
-    container.appendChild(renderer.domElement);
-
-    // ─────────────────────────────────────────────────
-    // LOAD SBS IMAGE & BUILD SCENE
-    // ─────────────────────────────────────────────────
-    function buildScene(texture) {
-      texture.minFilter = THREE.LinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-
-      // SBS image: left half = left eye, right half = right eye
-      // We place a plane in front of the camera for each eye
-      // using texture UV offsets to show the correct half
-
-      const aspect = texture.image.width / 2 / texture.image.height;
-      const planeWidth = 4;
-      const planeHeight = planeWidth / aspect;
-      const dist = 2; // distance from viewer in metres
-
-      const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
-
-      // Left eye: UV x from 0 to 0.5
-      const leftTexture = texture.clone();
-      leftTexture.needsUpdate = true;
-      leftTexture.repeat.set(0.5, 1);
-      leftTexture.offset.set(0, 0);
-      const leftMat = new THREE.MeshBasicMaterial({ map: leftTexture });
-      const leftMesh = new THREE.Mesh(geometry, leftMat);
-      leftMesh.position.set(0, 0, -dist);
-      leftMesh.layers.set(1); // left eye layer
-
-      // Right eye: UV x from 0.5 to 1
-      const rightTexture = texture.clone();
-      rightTexture.needsUpdate = true;
-      rightTexture.repeat.set(0.5, 1);
-      rightTexture.offset.set(0.5, 0);
-      const rightMat = new THREE.MeshBasicMaterial({ map: rightTexture });
-      const rightMesh = new THREE.Mesh(geometry, rightMat);
-      rightMesh.position.set(0, 0, -dist);
-      rightMesh.layers.set(2); // right eye layer
-
-      // Flat preview plane (layer 0) — shows left half on desktop
-      const previewTexture = texture.clone();
-      previewTexture.needsUpdate = true;
-      previewTexture.repeat.set(0.5, 1);
-      previewTexture.offset.set(0, 0);
-      const previewMat = new THREE.MeshBasicMaterial({ map: previewTexture });
-      const previewMesh = new THREE.Mesh(geometry, previewMat);
-      previewMesh.position.set(0, 0, -dist);
-      previewMesh.layers.set(0); // default layer, visible outside VR
-
-      scene.add(leftMesh, rightMesh, previewMesh);
-
-      // Hide loading
-      document.getElementById('loading').classList.add('hidden');
-    }
-
-    // ─────────────────────────────────────────────────
-    // XR CAMERA LAYER CONFIGURATION
-    // Called once the VR session starts so each eye
-    // camera only sees its own layer
-    // ─────────────────────────────────────────────────
-    renderer.xr.addEventListener('sessionstart', () => {
-      const xrCamera = renderer.xr.getCamera();
-      if (xrCamera.cameras && xrCamera.cameras.length >= 2) {
-        // Left eye: sees layer 1 only
-        xrCamera.cameras[0].layers.disableAll();
-        xrCamera.cameras[0].layers.enable(1);
-
-        // Right eye: sees layer 2 only
-        xrCamera.cameras[1].layers.disableAll();
-        xrCamera.cameras[1].layers.enable(2);
+    const gallery = document.getElementById('gallery');
+    const emptyState = document.getElementById('emptyState');
+    let currentFilter = 'all';
+ 
+    function render(filter) {
+      gallery.innerHTML = '';
+      const filtered = filter === 'all' ? images : images.filter(i => i.category === filter);
+ 
+      if (filtered.length === 0) {
+        emptyState.classList.add('visible');
+        return;
       }
-      // Hide flat UI elements in VR
-      document.getElementById('ui').style.display = 'none';
-      document.getElementById('preview-hint').style.display = 'none';
-    });
-
-    renderer.xr.addEventListener('sessionend', () => {
-      // Restore eye cameras to defaults when leaving VR
-      const xrCamera = renderer.xr.getCamera();
-      if (xrCamera.cameras && xrCamera.cameras.length >= 2) {
-        xrCamera.cameras[0].layers.enableAll();
-        xrCamera.cameras[1].layers.enableAll();
-      }
-      document.getElementById('ui').style.display = '';
-    });
-
-    // ─────────────────────────────────────────────────
-    // VR BUTTON
-    // ─────────────────────────────────────────────────
-    const vrBtn = document.getElementById('vr-btn');
-
-    async function checkVRSupport() {
-      if (navigator.xr) {
-        const supported = await navigator.xr.isSessionSupported('immersive-vr');
-        if (supported) {
-          vrBtn.disabled = false;
-          vrBtn.addEventListener('click', enterVR);
-        }
-      }
-    }
-
-    async function enterVR() {
-      try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: ['local-floor', 'bounded-floor']
+      emptyState.classList.remove('visible');
+ 
+      filtered.forEach((img, index) => {
+        const item = document.createElement('div');
+        item.className = 'gallery-item';
+        item.style.animationDelay = `${index * 0.07}s`;
+ 
+        // For SBS images, we show only the left half as the thumbnail preview
+        // The full SBS image is passed to the viewer for stereoscopic display
+        item.innerHTML = `
+          <img src="${img.src}" alt="${img.title}" loading="lazy">
+          <div class="item-overlay">
+            <div class="item-title">${img.title}</div>
+            <div class="item-category">${img.category}</div>
+          </div>
+          <div class="vr-badge">View in VR</div>
+        `;
+ 
+        item.addEventListener('click', () => {
+          const encodedSrc = encodeURIComponent(img.src);
+          const encodedTitle = encodeURIComponent(img.title);
+          window.location.href = `viewer.html?img=${encodedSrc}&title=${encodedTitle}`;
         });
-        renderer.xr.setSession(session);
-        vrBtn.textContent = 'Exit VR';
-        vrBtn.removeEventListener('click', enterVR);
-        vrBtn.addEventListener('click', () => session.end());
-
-        session.addEventListener('end', () => {
-          vrBtn.textContent = 'Enter VR';
-          vrBtn.removeEventListener('click', () => session.end());
-          vrBtn.addEventListener('click', enterVR);
-        });
-      } catch (err) {
-        console.error('VR session error:', err);
-      }
+ 
+        gallery.appendChild(item);
+      });
     }
-
-    checkVRSupport();
-
-    // ─────────────────────────────────────────────────
-    // TEXTURE LOAD
-    // ─────────────────────────────────────────────────
-    if (imgSrc) {
-      const loader = new THREE.TextureLoader();
-      loader.load(
-        decodeURIComponent(imgSrc),
-        (texture) => buildScene(texture),
-        undefined,
-        () => {
-          document.getElementById('error').classList.add('visible');
-          document.getElementById('loading').classList.add('hidden');
-        }
-      );
-    }
-
-    // ─────────────────────────────────────────────────
-    // RENDER LOOP
-    // ─────────────────────────────────────────────────
-    renderer.setAnimationLoop(() => {
-      renderer.render(scene, camera);
+ 
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        render(currentFilter);
+      });
     });
-
-    // ─────────────────────────────────────────────────
-    // RESIZE
-    // ─────────────────────────────────────────────────
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+ 
+    render('all');
   </script>
 </body>
 </html>
